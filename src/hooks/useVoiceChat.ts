@@ -3,46 +3,6 @@ import Peer from 'peerjs';
 
 type ChatState = 'idle' | 'connecting' | 'waiting' | 'calling' | 'connected' | 'ended' | 'error';
 
-// TURN + STUN servers for NAT traversal (needed for internet calls!)
-const ICE_SERVERS = {
-  iceServers: [
-    // Google STUN
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
-    // Free TURN — bistri
-    {
-      urls: 'turn:turn.bistri.com:80',
-      username: 'homeo',
-      credential: 'homeo',
-    },
-    // Free TURN — anyfirewall (TCP fallback)
-    {
-      urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
-      username: 'webrtc',
-      credential: 'webrtc',
-    },
-    // Free TURN — metered.ca open relay
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-  ],
-};
-
 function useVoiceChat(roomId: string | null, isHost: boolean) {
   const [peerId, setPeerId] = useState<string | null>(null);
   const [peerName, setPeerName] = useState<string>('');
@@ -58,7 +18,10 @@ function useVoiceChat(roomId: string | null, isHost: boolean) {
   const rtcCallRef = useRef<any>(null);
   const chatStateRef = useRef<ChatState>('idle');
 
-  useEffect(() => { chatStateRef.current = chatState; }, [chatState]);
+  // Keep ref in sync
+  useEffect(() => {
+    chatStateRef.current = chatState;
+  }, [chatState]);
 
   const cleanup = useCallback(() => {
     if (localStreamRef.current) {
@@ -104,7 +67,9 @@ function useVoiceChat(roomId: string | null, isHost: boolean) {
       });
 
       call.on('close', () => {
-        if (chatStateRef.current !== 'ended') setChatState('ended');
+        if (chatStateRef.current !== 'ended') {
+          setChatState('ended');
+        }
       });
 
       call.on('error', (err: any) => {
@@ -113,13 +78,18 @@ function useVoiceChat(roomId: string | null, isHost: boolean) {
         setError('Не удалось соединиться с собеседником');
       });
 
-      // Data connection for metadata (name, mute)
+      // Data connection for metadata
       const conn = peerRef.current.connect(hostId);
       dataConnRef.current = conn;
 
-      conn.on('open', () => conn.send(`name:${peerName}`));
+      conn.on('open', () => {
+        conn.send(`name:${peerName}`);
+      });
+
       conn.on('data', (data: string) => {
-        if (typeof data === 'string' && data.startsWith('name:')) setPeerName(data.substring(5));
+        if (typeof data === 'string' && data.startsWith('name:')) {
+          setPeerName(data.substring(5));
+        }
         if (data === 'mute') setIsRemoteMuted(true);
         if (data === 'unmute') setIsRemoteMuted(false);
       });
@@ -137,35 +107,54 @@ function useVoiceChat(roomId: string | null, isHost: boolean) {
         setChatState('connecting');
         cleanup();
 
-        const peer = new Peer(pid, {
-          debug: 0,
-          config: ICE_SERVERS,
-        });
+        // Use public cloud server for now (works everywhere)
+        // Local server fails on mobile browsers without proper HTTPS certificate
+        const peerConfig: any = { debug: 0 };
 
+        // Only use local server if explicitly configured via env or in production with proper HTTPS
+        const useLocalServer = false; // Disabled for mobile compatibility
+
+        if (useLocalServer) {
+          peerConfig.host = window.location.hostname;
+          peerConfig.port = window.location.port ? parseInt(window.location.port) : (window.location.protocol === 'https:' ? 443 : 80);
+          peerConfig.path = '/peerjs/myapp';
+          peerConfig.secure = window.location.protocol === 'https:';
+        }
+
+        const peer = new Peer(pid, peerConfig);
         peerRef.current = peer;
 
-        peer.on('open', () => {
-          setPeerId(pid);
+        peer.on('open', (_pid: string) => {
+          setPeerId(_pid);
           if (isHost) {
             setChatState('waiting');
           } else {
+            // Guest: automatically call the host after a short delay
             setChatState('calling');
-            setTimeout(() => makeCall(), 800);
+            setTimeout(() => {
+              makeCall();
+            }, 500);
           }
         });
 
         peer.on('error', (err: any) => {
           console.error('Peer error:', err);
-          const msgs: Record<string, string> = {
-            'unavailable-id': 'Этот ID уже занят. Попробуйте создать новую комнату.',
-            'peer-unavailable': 'Собеседник не найден. Возможно, он вышел из комнаты.',
-            'network': 'Ошибка сети. Проверьте подключение.',
-          };
-          setError(msgs[err.type] || 'Ошибка: ' + err.type);
-          setChatState('error');
+          if (err.type === 'unavailable-id') {
+            setError('Этот ID уже занят. Попробуйте создать новую комнату.');
+            setChatState('error');
+          } else if (err.type === 'peer-unavailable') {
+            setError('Собеседник не найден. Возможно, он вышел из комнаты.');
+            setChatState('error');
+          } else if (err.type === 'network') {
+            setError('Ошибка сети. Проверьте подключение.');
+            setChatState('error');
+          } else {
+            setError('Ошибка: ' + err.type);
+            setChatState('error');
+          }
         });
 
-        // === HOST: handle incoming calls ===
+        // Handle incoming voice calls (for host)
         peer.on('call', (call: any) => {
           navigator.mediaDevices
             .getUserMedia({ audio: true, video: false })
@@ -183,7 +172,9 @@ function useVoiceChat(roomId: string | null, isHost: boolean) {
                 setChatState('connected');
               });
 
-              call.on('close', () => setChatState('ended'));
+              call.on('close', () => {
+                setChatState('ended');
+              });
             })
             .catch((err: any) => {
               console.error('Mic error:', err);
@@ -192,13 +183,16 @@ function useVoiceChat(roomId: string | null, isHost: boolean) {
             });
         });
 
-        // === HOST: handle incoming data connection ===
+        // Handle incoming data connections (for host)
         peer.on('connection', (conn: any) => {
           dataConnRef.current = conn;
+
           conn.on('data', (data: string) => {
             if (data === 'mute') setIsRemoteMuted(true);
             if (data === 'unmute') setIsRemoteMuted(false);
-            if (typeof data === 'string' && data.startsWith('name:')) setPeerName(data.substring(5));
+            if (typeof data === 'string' && data.startsWith('name:')) {
+              setPeerName(data.substring(5));
+            }
           });
         });
       } catch (err) {
@@ -211,8 +205,12 @@ function useVoiceChat(roomId: string | null, isHost: boolean) {
   );
 
   const endCall = useCallback(() => {
-    if (rtcCallRef.current) try { rtcCallRef.current.close(); } catch {}
-    if (dataConnRef.current) try { dataConnRef.current.close(); } catch {}
+    if (rtcCallRef.current) {
+      try { rtcCallRef.current.close(); } catch {}
+    }
+    if (dataConnRef.current) {
+      try { dataConnRef.current.close(); } catch {}
+    }
     setChatState('ended');
     cleanup();
   }, [cleanup]);
@@ -220,25 +218,36 @@ function useVoiceChat(roomId: string | null, isHost: boolean) {
   const toggleMute = useCallback(() => {
     const newMuted = !isMuted;
     setIsMuted(newMuted);
+
     if (localStreamRef.current) {
-      localStreamRef.current.getAudioTracks().forEach((track) => { track.enabled = !newMuted; });
+      localStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !newMuted;
+      });
     }
+
     if (dataConnRef.current && dataConnRef.current.open) {
       dataConnRef.current.send(newMuted ? 'mute' : 'unmute');
     }
   }, [isMuted]);
 
-  // Manually trigger a call (for retry)
-  const retry = useCallback(() => {
-    setChatState('calling');
-    makeCall();
-  }, [makeCall]);
-
-  useEffect(() => { return () => cleanup(); }, [cleanup]);
+  useEffect(() => {
+    return () => {
+      cleanup();
+    };
+  }, [cleanup]);
 
   return {
-    peerId, chatState, isMuted, isRemoteMuted, error, peerName,
-    setPeerName, initPeer, endCall, toggleMute, setError, retry,
+    peerId,
+    chatState,
+    isMuted,
+    isRemoteMuted,
+    error,
+    peerName,
+    setPeerName,
+    initPeer,
+    endCall,
+    toggleMute,
+    setError,
   };
 }
 
