@@ -29,7 +29,6 @@ export default function App() {
     peerName,
     setPeerName,
     initPeer,
-    retry,
     endCall,
     toggleMute,
     setError,
@@ -141,15 +140,16 @@ export default function App() {
           {/* Name input */}
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm text-slate-400 font-medium">Ваше имя</label>
-              <input
-                type="text"
-                value={userName}
-                onChange={(e) => setUserName(e.target.value)}
-                placeholder="Введите ваше имя..."
-                className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all"
-                onKeyDown={(e) => { if (e.key === 'Enter') handleCreateRoom(); }}
-              />
+          <label className="text-sm text-slate-400 font-medium">Ваше имя</label>
+          <input
+            type="text"
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+            placeholder="Введите ваше имя..."
+            autoFocus
+            className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500/50 transition-all"
+            onKeyDown={(e) => { if (e.key === 'Enter') handleCreateRoom(); }}
+          />
             </div>
 
             {/* Create room button */}
@@ -333,14 +333,6 @@ export default function App() {
                   <div className="w-2 h-2 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                   <div className="w-2 h-2 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                 </div>
-                {!isHost && (
-                  <button
-                    onClick={retry}
-                    className="px-4 py-2 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-300 text-sm hover:bg-yellow-500/20 transition-all"
-                  >
-                    🔄 Позвонить ещё раз
-                  </button>
-                )}
               </div>
             )}
 
@@ -491,10 +483,8 @@ export default function App() {
                 onClick={() => {
                   setError(null);
                   if (!isHost) {
-                    retry();
-                  } else {
-                    const hostId = 'voice-chat-' + currentRoomId;
-                    initPeer(hostId);
+                    const guestId = 'voice-chat-guest-' + Math.random().toString(36).substring(2, 10);
+                    initPeer(guestId);
                   }
                 }}
                 className="flex-1 py-3 rounded-xl bg-white/10 border border-white/10 text-white font-medium hover:bg-white/15 transition-all"
